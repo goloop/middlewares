@@ -121,6 +121,35 @@ func TestCompressSkipsWhenClientDoesNotAccept(t *testing.T) {
 	}
 }
 
+func TestCompressSkipsUpgrade(t *testing.T) {
+	big := strings.Repeat("a", 4000)
+	h := Compress()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, big)
+	}))
+	r := gzipRequest(http.MethodGet, "/")
+	r.Header.Set("Upgrade", "websocket")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	if enc := rec.Header().Get("Content-Encoding"); enc != "" {
+		t.Fatalf("upgrade request must not be compressed, got %q", enc)
+	}
+}
+
+func TestCompressExposesHijacker(t *testing.T) {
+	h := Compress()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			t.Fatal("compress writer must expose http.Hijacker for upgrades")
+		}
+		// A recorder cannot be hijacked; the call must return an error, not panic.
+		if _, _, err := hj.Hijack(); err == nil {
+			t.Fatal("expected an error hijacking a recorder")
+		}
+	}))
+	h.ServeHTTP(httptest.NewRecorder(), gzipRequest(http.MethodGet, "/"))
+}
+
 func TestCompressSkipsNonCompressibleType(t *testing.T) {
 	big := strings.Repeat("\x00", 4000)
 	h := Compress()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

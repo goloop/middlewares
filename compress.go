@@ -1,8 +1,10 @@
 package middlewares
 
 import (
+	"bufio"
 	"compress/gzip"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -89,7 +91,10 @@ func Compress(opts ...CompressOption) Middleware {
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method == http.MethodHead || !acceptsGzip(r) {
+			// Skip HEAD, clients that do not accept gzip, and connection
+			// upgrades (WebSocket and similar), which must not be buffered.
+			if r.Method == http.MethodHead || !acceptsGzip(r) ||
+				r.Header.Get("Upgrade") != "" {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -222,6 +227,16 @@ func (c *compressWriter) Flush() {
 	}
 	//nolint:errcheck // flush is best-effort
 	http.NewResponseController(c.ResponseWriter).Flush()
+}
+
+// Hijack lets a handler take over the connection (for example a WebSocket
+// upgrade). A hijacked connection is used raw and cannot be gzipped, so the
+// writer stops managing the response and forwards to the underlying one.
+func (c *compressWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	c.decided = true
+	c.passthrough = true
+	c.buf = nil
+	return http.NewResponseController(c.ResponseWriter).Hijack()
 }
 
 // close finalizes the response: it emits a small buffered body uncompressed, or
