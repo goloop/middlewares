@@ -170,7 +170,8 @@ func TestCompressTypesRestriction(t *testing.T) {
 
 func TestResponseWriterReadFrom(t *testing.T) {
 	// io.Copy into the Logger-wrapped writer exercises the ReadFrom path.
-	h := Logger(WithLogger(silentLogger()))(http.HandlerFunc(
+	// Use an Info-level logger so Logger actually wraps the writer.
+	h := Logger(WithLogger(infoLogger()))(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			io.Copy(w, strings.NewReader("copied-bytes"))
 		}))

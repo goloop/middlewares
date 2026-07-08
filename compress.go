@@ -23,9 +23,17 @@ type compressConfig struct {
 // CompressOption configures the Compress middleware.
 type CompressOption func(*compressConfig)
 
-// WithCompressLevel sets the gzip level (gzip.BestSpeed to gzip.BestCompression).
+// WithCompressLevel sets the gzip level (gzip.BestSpeed to gzip.BestCompression,
+// plus gzip.DefaultCompression and gzip.HuffmanOnly). An out-of-range level is
+// ignored and the default is kept, so a configuration mistake cannot turn into
+// a deferred runtime nil-pointer panic on the first large request.
 func WithCompressLevel(level int) CompressOption {
-	return func(c *compressConfig) { c.level = level }
+	return func(c *compressConfig) {
+		if level == gzip.DefaultCompression || level == gzip.HuffmanOnly ||
+			(level >= gzip.NoCompression && level <= gzip.BestCompression) {
+			c.level = level
+		}
+	}
 }
 
 // WithCompressMinBytes sets the minimum response size to compress.
@@ -84,7 +92,12 @@ func Compress(opts ...CompressOption) Middleware {
 
 	pool := &sync.Pool{
 		New: func() any {
-			w, _ := gzip.NewWriterLevel(io.Discard, cfg.level)
+			// The level is validated by WithCompressLevel, but fall back to the
+			// default rather than returning a typed-nil writer if it is not.
+			w, err := gzip.NewWriterLevel(io.Discard, cfg.level)
+			if err != nil {
+				w, _ = gzip.NewWriterLevel(io.Discard, gzip.DefaultCompression)
+			}
 			return w
 		},
 	}
@@ -99,7 +112,16 @@ func Compress(opts ...CompressOption) Middleware {
 				return
 			}
 			cw := &compressWriter{ResponseWriter: w, cfg: &cfg, pool: pool}
-			defer cw.close()
+			defer func() {
+				if p := recover(); p != nil {
+					// Do not flush the buffered partial response during panic
+					// unwinding: that would commit a 200 and stop an outer
+					// Recoverer from sending a 500. Discard and re-panic.
+					cw.discard()
+					panic(p)
+				}
+				cw.close()
+			}()
 			next.ServeHTTP(cw, r)
 		})
 	}
@@ -130,8 +152,30 @@ type compressWriter struct {
 }
 
 func (c *compressWriter) WriteHeader(code int) {
+	if code >= 100 && code < 200 {
+		// Informational (1xx) responses, e.g. 103 Early Hints, are forwarded
+		// immediately and must not latch the final status.
+		c.ResponseWriter.WriteHeader(code)
+		return
+	}
 	if c.status == 0 {
 		c.status = code
+	}
+}
+
+// Unwrap exposes the wrapped ResponseWriter so http.ResponseController can reach
+// the underlying deadline/flush methods through this wrapper (Go 1.20+ idiom).
+func (c *compressWriter) Unwrap() http.ResponseWriter { return c.ResponseWriter }
+
+// discard drops the buffered response without writing anything, returning any
+// gzip writer to the pool. It is used on the panic path so a partial buffered
+// body is not committed as a successful response.
+func (c *compressWriter) discard() {
+	c.buf = nil
+	if c.gz != nil {
+		c.gz.Reset(io.Discard)
+		c.pool.Put(c.gz)
+		c.gz = nil
 	}
 }
 

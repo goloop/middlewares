@@ -61,7 +61,7 @@ func RealIP(opts ...RealIPOption) Middleware {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ip := directIP(r.RemoteAddr)
 			if cfg.trustedPeer(ip) {
-				if forwarded := forwardedIP(r); forwarded != "" {
+				if forwarded := cfg.forwardedIP(r); forwarded != "" {
 					ip = forwarded
 				}
 			}
@@ -92,20 +92,30 @@ func directIP(remoteAddr string) string {
 	return remoteAddr
 }
 
-// forwardedIP returns the client IP from the forwarded headers, preferring
-// X-Real-IP and otherwise the left-most entry of X-Forwarded-For. It returns an
-// empty string when no valid address is present.
-func forwardedIP(r *http.Request) string {
+// forwardedIP returns the client IP from the forwarded headers. It walks
+// X-Forwarded-For from right to left - the right-most entry is the one appended
+// by the nearest proxy - skipping trusted-proxy addresses; the first untrusted
+// address is the client. This resists spoofing: a client-supplied left-most
+// entry (X-Forwarded-For: 6.6.6.6) is never returned because the proxy appends
+// the real address to its right. X-Real-IP, which a proxy sets as a single
+// value, is used only as a fallback and only when it is a valid IP. An empty
+// string is returned when no valid address is present.
+func (c *realIPConfig) forwardedIP(r *http.Request) string {
+	if xff := r.Header.Get(headerXForwardedFor); xff != "" {
+		parts := strings.Split(xff, ",")
+		for i := len(parts) - 1; i >= 0; i-- {
+			ip := strings.TrimSpace(parts[i])
+			if net.ParseIP(ip) == nil {
+				break // malformed chain: do not trust anything further left
+			}
+			if !c.trustedPeer(ip) {
+				return ip
+			}
+		}
+	}
 	if v := strings.TrimSpace(r.Header.Get(headerXRealIP)); v != "" {
 		if net.ParseIP(v) != nil {
 			return v
-		}
-	}
-	if xff := r.Header.Get(headerXForwardedFor); xff != "" {
-		first, _, _ := strings.Cut(xff, ",")
-		first = strings.TrimSpace(first)
-		if net.ParseIP(first) != nil {
-			return first
 		}
 	}
 	return ""

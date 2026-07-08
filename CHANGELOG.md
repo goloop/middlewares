@@ -5,10 +5,9 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.0]
 
-Initial v0 development branch: a dependency-free set of HTTP middleware for
-`net/http`.
+Initial v0 release: a dependency-free set of HTTP middleware for `net/http`.
 
 ### Added
 
@@ -25,3 +24,20 @@ Initial v0 development branch: a dependency-free set of HTTP middleware for
 - `SecurityHeaders` and `MaxBytes`.
 - Internal response-writer wrapper that preserves `Flush`, `Hijack` and
   `ReadFrom`.
+
+### Fixed
+
+- `Compress` no longer neutralizes an outer `Recoverer`: on a handler panic it
+  discards the buffered partial response and re-panics, so `Recoverer` still
+  sends a 500 instead of a 200 with a truncated body.
+- `WithCompressLevel` validates the gzip level and ignores an out-of-range
+  value, so a configuration mistake can no longer become a deferred nil-pointer
+  panic on the first large request.
+- The response-writer and compress wrappers implement `Unwrap`, so
+  `http.ResponseController` (e.g. `SetWriteDeadline`) works through `Logger`,
+  `Recoverer` and `Compress`.
+- Informational 1xx responses (e.g. `103 Early Hints`) are forwarded without
+  latching the status, so the final status is preserved.
+- `RealIP` reads `X-Forwarded-For` from right to left, skipping trusted
+  proxies, so a client-supplied left-most entry can no longer spoof the
+  resolved address.

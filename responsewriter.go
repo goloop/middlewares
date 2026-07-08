@@ -24,6 +24,12 @@ func wrapWriter(w http.ResponseWriter) *responseWriter {
 }
 
 func (w *responseWriter) WriteHeader(code int) {
+	if code >= 100 && code < 200 {
+		// Informational (1xx) responses, e.g. 103 Early Hints, may be sent
+		// several times before the final status; forward them without latching.
+		w.ResponseWriter.WriteHeader(code)
+		return
+	}
 	if w.wroteHeader {
 		return
 	}
@@ -31,6 +37,10 @@ func (w *responseWriter) WriteHeader(code int) {
 	w.wroteHeader = true
 	w.ResponseWriter.WriteHeader(code)
 }
+
+// Unwrap exposes the wrapped ResponseWriter so http.ResponseController can reach
+// the underlying deadline/flush methods through this wrapper (Go 1.20+ idiom).
+func (w *responseWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 func (w *responseWriter) Write(b []byte) (int, error) {
 	if !w.wroteHeader {

@@ -237,6 +237,15 @@ func silentLogger() *slog.Logger {
 	}))
 }
 
+// infoLogger discards output but is enabled at Info, so Logger actually wraps
+// the ResponseWriter (a silent Error-level logger makes Logger skip wrapping,
+// which would leave the wrapper untested).
+func infoLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(&bytes.Buffer{}, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	}))
+}
+
 func TestLoggerCapturesStatusAndBytes(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
@@ -284,7 +293,7 @@ func TestLoggerDisabledDoesNotLog(t *testing.T) {
 
 func TestLoggerPreservesFlush(t *testing.T) {
 	flushed := false
-	h := Logger(WithLogger(silentLogger()))(http.HandlerFunc(
+	h := Logger(WithLogger(infoLogger()))(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			f, ok := w.(http.Flusher)
 			if !ok {
