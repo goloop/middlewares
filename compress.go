@@ -151,6 +151,9 @@ type compressWriter struct {
 	gz          *gzip.Writer
 }
 
+// WriteHeader records the final status without sending it yet: the header is
+// held back until the first Write decides whether to compress. Informational
+// (1xx) statuses are forwarded immediately and do not latch the final code.
 func (c *compressWriter) WriteHeader(code int) {
 	if code >= 100 && code < 200 {
 		// Informational (1xx) responses, e.g. 103 Early Hints, are forwarded
@@ -179,6 +182,10 @@ func (c *compressWriter) discard() {
 	}
 }
 
+// Write buffers the response until enough bytes accumulate to decide whether
+// compression is worthwhile (the minBytes threshold), then commits to a path
+// and streams through it. Once the decision is made, later writes go straight
+// to the chosen writer.
 func (c *compressWriter) Write(b []byte) (int, error) {
 	if c.decided {
 		return c.writeDecided(b)

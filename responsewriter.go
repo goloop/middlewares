@@ -23,6 +23,9 @@ func wrapWriter(w http.ResponseWriter) *responseWriter {
 	return &responseWriter{ResponseWriter: w}
 }
 
+// WriteHeader records the final status once and forwards it to the wrapped
+// writer. Repeat calls are ignored so the captured status matches what the
+// client received; informational (1xx) statuses are forwarded without latching.
 func (w *responseWriter) WriteHeader(code int) {
 	if code >= 100 && code < 200 {
 		// Informational (1xx) responses, e.g. 103 Early Hints, may be sent
@@ -42,6 +45,9 @@ func (w *responseWriter) WriteHeader(code int) {
 // the underlying deadline/flush methods through this wrapper (Go 1.20+ idiom).
 func (w *responseWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
+// Write sends the body to the wrapped writer, implicitly writing a 200 status
+// first if the handler has not set one, and accumulates the byte count exposed
+// by Written.
 func (w *responseWriter) Write(b []byte) (int, error) {
 	if !w.wroteHeader {
 		w.WriteHeader(http.StatusOK)
