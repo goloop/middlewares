@@ -51,6 +51,19 @@ func TrustLoopbackProxies() RealIPOption {
 // ignores forwarded headers, which is the safe choice: without a trusted proxy
 // policy a client can spoof X-Forwarded-For. Configure WithTrustedProxies (or
 // TrustLoopbackProxies) to honor forwarded headers from known proxies.
+//
+// Know what that default costs behind a reverse proxy. If requests arrive
+// through nginx, a dev server or anything else in front, the direct peer is
+// that proxy, so every client resolves to one address. Nothing errors and
+// nothing looks wrong: rate limits, audit trails and ban lists keyed by IP
+// simply become shared by everyone at once. A limit of twenty attempts per
+// address is then twenty for the whole userbase, and the second person to
+// mistype a password is locked out by the first.
+//
+// That is the price of not trusting a header anyone can forge, and it is the
+// right default - but it is only correct once WithTrustedProxies tells this
+// middleware which peer is the proxy. Configure it before relying on anything
+// keyed by client address.
 func RealIP(opts ...RealIPOption) Middleware {
 	var cfg realIPConfig
 	for _, opt := range opts {

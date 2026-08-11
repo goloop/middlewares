@@ -3,6 +3,7 @@ package middlewares
 import (
 	"net/http"
 	"strconv"
+	"time"
 )
 
 // Default values for the security headers. They are conservative and safe for
@@ -19,6 +20,8 @@ type securityConfig struct {
 	frameOptions       string
 	referrerPolicy     string
 	hstsSeconds        int
+	hstsSubDomains     bool
+	hstsPreload        bool
 	csp                string
 }
 
@@ -40,8 +43,43 @@ func WithReferrerPolicy(v string) SecurityOption {
 // WithHSTS enables Strict-Transport-Security with the given max-age in seconds.
 // It should only be set for sites served exclusively over HTTPS. Zero, the
 // default, omits the header.
+//
+// Use [WithHSTSPolicy] for the directives a full policy usually carries.
 func WithHSTS(seconds int) SecurityOption {
 	return func(c *securityConfig) { c.hstsSeconds = seconds }
+}
+
+// HSTS is a complete Strict-Transport-Security policy.
+type HSTS struct {
+	// MaxAge is how long a browser should refuse plain HTTP for this host.
+	// It is a duration rather than a count of seconds because a year is
+	// easier to read as 365*24*time.Hour than as 31536000. Values below a
+	// second round down to zero, which omits the header.
+	MaxAge time.Duration
+
+	// IncludeSubDomains extends the policy to every subdomain. Almost every
+	// real policy wants it, and it is worth meaning: a subdomain that cannot
+	// serve HTTPS becomes unreachable for as long as MaxAge lasts.
+	IncludeSubDomains bool
+
+	// Preload asks for inclusion in the browsers' built-in list. It requires
+	// IncludeSubDomains and a long MaxAge, and removal from that list takes
+	// months, so set it only for a host that will be HTTPS-only indefinitely.
+	Preload bool
+}
+
+// WithHSTSPolicy sets a full Strict-Transport-Security policy, including
+// includeSubDomains and preload.
+//
+// It replaces rather than extends [WithHSTS]; the last of the two applied
+// wins. A zero MaxAge omits the header, so a policy can be turned off in one
+// place without unpicking the rest of it.
+func WithHSTSPolicy(p HSTS) SecurityOption {
+	return func(c *securityConfig) {
+		c.hstsSeconds = int(p.MaxAge / time.Second)
+		c.hstsSubDomains = p.IncludeSubDomains
+		c.hstsPreload = p.Preload
+	}
 }
 
 // WithCSP sets a Content-Security-Policy. It is opt-in because a good policy
@@ -74,12 +112,26 @@ func SecurityHeaders(opts ...SecurityOption) Middleware {
 				setIfAbsent(h, "Content-Security-Policy", cfg.csp)
 			}
 			if cfg.hstsSeconds > 0 {
-				setIfAbsent(h, "Strict-Transport-Security",
-					"max-age="+strconv.Itoa(cfg.hstsSeconds))
+				setIfAbsent(h, "Strict-Transport-Security", hstsValue(cfg))
 			}
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// hstsValue renders the policy in the order the header is conventionally
+// written. preload is emitted only alongside includeSubDomains, because the
+// browser lists reject a policy without it and a header that can never be
+// honoured is worse than an honest one.
+func hstsValue(cfg securityConfig) string {
+	v := "max-age=" + strconv.Itoa(cfg.hstsSeconds)
+	if cfg.hstsSubDomains {
+		v += "; includeSubDomains"
+		if cfg.hstsPreload {
+			v += "; preload"
+		}
+	}
+	return v
 }
 
 func setIfAbsent(h http.Header, key, value string) {

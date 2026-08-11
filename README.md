@@ -27,6 +27,8 @@ compression, throttling, CORS and security headers.
 - `Timeout` - a per-request deadline built on `http.TimeoutHandler`.
 - `Compress` - gzip with skip rules for small bodies, server-sent events and
   already-encoded responses.
+- `RateLimit` - how often one client may come back, with a pluggable store
+  and an in-process token bucket by default.
 - `Throttle` - an in-process concurrency limiter: a semaphore with load
   shedding, for work that pays its cost per call (password hashing, image
   processing).
