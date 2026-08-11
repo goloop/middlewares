@@ -27,7 +27,9 @@ compression, throttling, CORS and security headers.
 - `Timeout` - a per-request deadline built on `http.TimeoutHandler`.
 - `Compress` - gzip with skip rules for small bodies, server-sent events and
   already-encoded responses.
-- `Throttle` - an in-process concurrency limiter.
+- `Throttle` - an in-process concurrency limiter: a semaphore with load
+  shedding, for work that pays its cost per call (password hashing, image
+  processing).
 - `CORS` - safe by default; nothing is allowed until you name the origins.
 - `SecurityHeaders`, `MaxBytes` - conservative headers and a request-body cap.
 - `Chain` and `Handler` - compose middleware.
@@ -90,7 +92,10 @@ Read these before production use:
 - **CORS** allows nothing until you name the origins; a wildcard origin together
   with credentials is rejected at construction.
 - **Throttle** is an in-process concurrency limiter, not a distributed rate
-  limiter.
+  limiter - and not a substitute for one. A rate limit answers "how often may
+  this client come back"; Throttle answers "how much of this work fits in the
+  process at once". Ten-per-minute still admits ten in the same second; ten
+  slots do not. Pair them in front of memory-bound endpoints such as login.
 
 ## Logging
 
