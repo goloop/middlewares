@@ -47,7 +47,15 @@ func TrustLoopbackProxies() RealIPOption {
 }
 
 // RealIP resolves the client IP and stores it in the request context, readable
-// with RealIPFrom. By default it uses the direct peer address (RemoteAddr) and
+// with RealIPFrom.
+//
+// The context is the only place it writes. It does not rewrite
+// Request.RemoteAddr, and nothing downstream that reads RemoteAddr sees a
+// resolved address - a handler doing so gets the peer, which behind a proxy is
+// the proxy. Anything that wants the client address has to ask RealIPFrom for
+// it; that is the whole interface.
+//
+// By default it uses the direct peer address (RemoteAddr) and
 // ignores forwarded headers, which is the safe choice: without a trusted proxy
 // policy a client can spoof X-Forwarded-For. Configure WithTrustedProxies (or
 // TrustLoopbackProxies) to honor forwarded headers from known proxies.

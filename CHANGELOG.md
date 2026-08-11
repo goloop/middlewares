@@ -5,6 +5,20 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-08-11
+
+Patch release: documentation, prompted by a defect it went on to find.
+
+### Documentation
+- `RealIP` and `RealIPFrom` now say explicitly that the context is the only
+  place the resolved address is written, and that `Request.RemoteAddr` is left
+  untouched. The previous wording was true and easy to read past: a project
+  keyed its rate limit on `RemoteAddr` believing the middleware had normalized
+  it, and behind nginx that gave the whole userbase one shared bucket - the
+  failure is silent, and only shows up in production because a developer
+  hitting the API directly never goes through the proxy.
+- A test pins the promise, so the sentence cannot quietly become untrue.
+
 ## [0.3.0] - 2026-08-11
 
 Minor release: rate limiting, correlated logs and a full HSTS policy. All
