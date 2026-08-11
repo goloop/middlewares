@@ -13,6 +13,7 @@ dependencies. Every middleware is a `func(http.Handler) http.Handler`.
 - [Timeout](#timeout)
 - [Compress](#compress)
 - [Throttle](#throttle)
+- [RateLimit](#ratelimit)
 - [CORS](#cors)
 - [SecurityHeaders](#securityheaders)
 - [MaxBytes](#maxbytes)
@@ -100,6 +101,21 @@ Attributes: `method`, `path`, `status`, `bytes`, `duration`, and `request_id`
 when `RequestID` ran earlier. No work is done when the request is skipped or the
 logger is not enabled at the level.
 
+`WithContextLogger()` additionally puts a request-scoped logger into the
+context, already carrying `request_id`, `method`, `path` (and `remote_ip` when
+`RealIP` ran), so handler logs correlate with the request line without anyone
+remembering to add identifiers:
+
+```go
+h := middlewares.Logger(middlewares.WithContextLogger())
+// in a handler:
+middlewares.LoggerFrom(r.Context()).Warn("upstream refused", "status", code)
+```
+
+`LoggerFrom` falls back to `slog.Default()` outside a request or without the
+option, so a call site never has to check. The option is opt-in because it
+allocates per request.
+
 ## Timeout
 
 A per-request deadline built on `http.TimeoutHandler`.
@@ -147,6 +163,48 @@ At most `limit` requests run at once; further requests are rejected immediately
 rather than queued. This is per process, not a distributed rate limiter.
 `Throttle` panics if `limit` is not positive.
 
+It answers a different question from `RateLimit`: how much of this work fits in
+the process at once, versus how often one client may come back. In front of
+expensive work such as password hashing, both belong.
+
+## RateLimit
+
+How often one caller may return, keyed however you choose.
+
+```go
+middlewares.RateLimit(middlewares.RateLimitConfig{
+    Key:    middlewares.KeyByIP(),               // default; or KeyByHeader("X-API-Key")
+    Limit:  20,
+    Window: 15 * time.Minute,
+    Store:  middlewares.NewMemoryRateLimitStore(), // default; per process
+},
+    middlewares.WithRateLimitStatus(429),          // default
+    // middlewares.WithFailOpen(),                 // see below before using
+)
+```
+
+A refused request gets the configured status, `Retry-After` and the
+`X-RateLimit-Limit`/`-Remaining`/`-Reset` headers; an allowed one gets the same
+headers minus `Retry-After`, so a client can slow down before it is refused.
+
+The memory store is a token bucket, which is why there is no double burst at a
+window boundary the way a fixed window allows. It counts only what this
+process saw: behind a load balancer each instance keeps its own buckets, and a
+limit that must hold across them needs a `RateLimitStore` the instances share.
+The interface is one method, so a Redis or database implementation is a short
+piece of application code rather than a dependency of this package.
+
+When the store cannot answer, the request is refused with 503. A limiter
+usually guards sign-in, password reset and one-time codes, and a store outage
+that silently removed the limit from exactly those routes would turn an
+availability problem into a security one. `WithFailOpen` chooses the other
+trade, explicitly, for routes where reachability matters more.
+
+Anything keyed by client address inherits the `RealIP` caveat: behind a proxy
+with no trusted-proxy policy, every client resolves to the proxy and the limit
+becomes one bucket shared by everyone. `RateLimit` panics if `Limit` or
+`Window` is not positive.
+
 ## CORS
 
 Cross-Origin Resource Sharing, safe by default.
@@ -184,6 +242,23 @@ middlewares.SecurityHeaders(
 Defaults: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
 `Referrer-Policy: no-referrer`. HSTS and CSP are opt-in because they depend on
 the deployment.
+
+### Full HSTS policy
+
+`WithHSTS(seconds)` emits `max-age` only. A real policy almost always wants
+more, and `WithHSTSPolicy` carries it:
+
+```go
+middlewares.SecurityHeaders(middlewares.WithHSTSPolicy(middlewares.HSTS{
+    MaxAge:            365 * 24 * time.Hour,
+    IncludeSubDomains: true,
+    Preload:           true,
+}))
+```
+
+`preload` is emitted only alongside `includeSubDomains`, because the browser
+preload lists reject it otherwise and a header that can never be honoured is
+worse than an honest one. A zero `MaxAge` omits the header entirely.
 
 ## MaxBytes
 

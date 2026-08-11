@@ -13,6 +13,7 @@ Production-ready HTTP middleware для `net/http`, без сторонніх з
 - [Timeout](#timeout)
 - [Compress](#compress)
 - [Throttle](#throttle)
+- [RateLimit](#ratelimit)
 - [CORS](#cors)
 - [SecurityHeaders](#securityheaders)
 - [MaxBytes](#maxbytes)
@@ -100,6 +101,20 @@ middlewares.Logger(
 коли раніше відпрацював `RequestID`. Нічого не робиться, якщо запит пропущено або
 логер вимкнено на рівні.
 
+`WithContextLogger()` додатково кладе в контекст запитовий логер, що вже несе
+`request_id`, `method`, `path` (і `remote_ip`, коли відпрацював `RealIP`), тож
+рядки хендлерів корелюються з рядком запиту без того, щоб хтось пам'ятав про
+ідентифікатори:
+
+```go
+h := middlewares.Logger(middlewares.WithContextLogger())
+// у хендлері:
+middlewares.LoggerFrom(r.Context()).Warn("upstream refused", "status", code)
+```
+
+`LoggerFrom` поза запитом чи без опції відкочується до `slog.Default()`, тож
+місцю виклику ніколи не треба перевіряти. Опція - opt-in, бо алокує на запит.
+
 ## Timeout
 
 Дедлайн на запит поверх `http.TimeoutHandler`.
@@ -147,6 +162,48 @@ middlewares.Throttle(100,
 а не ставляться в чергу. Це в межах процесу, не розподілений rate limiter.
 `Throttle` панікує, якщо `limit` недодатний.
 
+Він відповідає на інше питання, ніж `RateLimit`: скільки цієї роботи вміщається
+в процес одночасно - проти того, як часто один клієнт може повертатися. Перед
+дорогою роботою на кшталт хешування паролів доречні обидва.
+
+## RateLimit
+
+Як часто один викликач може повертатися, з ключем на ваш вибір.
+
+```go
+middlewares.RateLimit(middlewares.RateLimitConfig{
+    Key:    middlewares.KeyByIP(),               // дефолт; або KeyByHeader("X-API-Key")
+    Limit:  20,
+    Window: 15 * time.Minute,
+    Store:  middlewares.NewMemoryRateLimitStore(), // дефолт; у межах процесу
+},
+    middlewares.WithRateLimitStatus(429),          // дефолт
+    // middlewares.WithFailOpen(),                 // спершу прочитайте нижче
+)
+```
+
+Відхилений запит отримує налаштований статус, `Retry-After` і заголовки
+`X-RateLimit-Limit`/`-Remaining`/`-Reset`; дозволений - ті самі заголовки без
+`Retry-After`, тож клієнт може сповільнитись до того, як його відхилять.
+
+Memory-стор - це token bucket, тому немає подвійного сплеску на межі вікон,
+який дозволяє fixed window. Він рахує лише те, що бачив цей процес: за
+балансувальником кожен інстанс тримає власні відра, і ліміт, який має діяти
+на всіх, потребує спільного `RateLimitStore`. Інтерфейс - один метод, тож
+реалізація на Redis чи базі - короткий шматок коду застосунку, а не залежність
+цього пакета.
+
+Коли стор не може відповісти, запит відхиляється з 503. Лімітер зазвичай
+охороняє вхід, скидання пароля й одноразові коди, і збій стора, який мовчки
+зняв би ліміт саме з цих маршрутів, перетворив би проблему доступності на
+проблему безпеки. `WithFailOpen` явно обирає інший компроміс для маршрутів,
+де досяжність важливіша.
+
+Усе, що ключується адресою клієнта, успадковує застереження `RealIP`: за
+проксі без політики довірених проксі всі клієнти резолвляться в проксі, і
+ліміт стає одним відром на всіх. `RateLimit` панікує, якщо `Limit` чи
+`Window` недодатні.
+
 ## CORS
 
 Cross-Origin Resource Sharing, безпечний за замовчуванням.
@@ -182,6 +239,23 @@ middlewares.SecurityHeaders(
 
 Дефолти: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
 `Referrer-Policy: no-referrer`. HSTS і CSP - opt-in, бо залежать від деплою.
+
+### Повна HSTS-політика
+
+`WithHSTS(seconds)` видає лише `max-age`. Справжня політика майже завжди хоче
+більшого, і його несе `WithHSTSPolicy`:
+
+```go
+middlewares.SecurityHeaders(middlewares.WithHSTSPolicy(middlewares.HSTS{
+    MaxAge:            365 * 24 * time.Hour,
+    IncludeSubDomains: true,
+    Preload:           true,
+}))
+```
+
+`preload` видається лише разом із `includeSubDomains`: preload-списки браузерів
+інакше його відхиляють, а заголовок, який ніколи не буде вшанований, гірший за
+чесний. Нульовий `MaxAge` пропускає заголовок цілком.
 
 ## MaxBytes
 

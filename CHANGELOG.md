@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-08-11
+
+Patch release: the reference catches up with v0.3.0.
+
+### Documentation
+- `DOC.md` and `DOC.UK.md` now cover `RateLimit` (the store, the fail-closed
+  default and its reason, the token-bucket memory reference, the RealIP
+  caveat), `WithContextLogger`/`LoggerFrom`, and `WithHSTSPolicy`. Until now
+  these lived only in the godoc.
+
 ## [0.3.1] - 2026-08-11
 
 Patch release: documentation, prompted by a defect it went on to find.
