@@ -228,6 +228,13 @@ type MemoryRateLimitStore struct {
 type bucket struct {
 	tokens float64
 	seen   time.Time
+
+	// full is when the bucket is back to its own limit, worked out from the
+	// limit and window it was last taken with. A store shared by several
+	// limits sweeps by this and not by the window of whichever request
+	// happens to trigger the sweep, so a route with a short window cannot
+	// hand a fresh budget to a key still being held by a long one.
+	full time.Time
 }
 
 // NewMemoryRateLimitStore returns an empty in-process token-bucket store.
@@ -263,25 +270,26 @@ func (s *MemoryRateLimitStore) Take(
 		b.seen = now
 	}
 
-	full := time.Duration((float64(limit)-b.tokens)/rate*1000) * time.Millisecond
-	res := RateLimitResult{Reset: now.Add(full)}
-
+	var res RateLimitResult
 	if b.tokens < 1 {
 		// Time until one token is back, which is when a retry can succeed.
-		res.RetryAfter = time.Duration((1-b.tokens)/rate*1000) * time.Millisecond
+		res.RetryAfter = time.Duration((1 - b.tokens) / rate * float64(time.Second))
 		res.Remaining = 0
-		return res, nil
+	} else {
+		b.tokens--
+		res.Allowed = true
+		res.Remaining = int(b.tokens)
 	}
 
-	b.tokens--
-	res.Allowed = true
-	res.Remaining = int(b.tokens)
-	res.Reset = now.Add(time.Duration((float64(limit)-b.tokens)/rate*1000) * time.Millisecond)
+	b.full = now.Add(time.Duration((float64(limit) - b.tokens) / rate * float64(time.Second)))
+	res.Reset = b.full
 	return res, nil
 }
 
-// sweep drops buckets that have been full and untouched for long enough that
-// they say nothing, so the map does not grow for the life of the process.
+// sweep drops buckets that are back to full, since a full bucket says nothing
+// a fresh one would not, so the map does not grow for the life of the process.
+// Each bucket is judged by its own refill time; the window of the request that
+// triggers the sweep only decides how often the map is walked.
 func (s *MemoryRateLimitStore) sweep(now time.Time, window time.Duration) {
 	if now.Sub(s.lastSweep) < window {
 		return
@@ -289,7 +297,7 @@ func (s *MemoryRateLimitStore) sweep(now time.Time, window time.Duration) {
 	s.lastSweep = now
 
 	for key, b := range s.buckets {
-		if now.Sub(b.seen) > 2*window {
+		if !now.Before(b.full) {
 			delete(s.buckets, key)
 		}
 	}

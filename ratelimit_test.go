@@ -283,3 +283,42 @@ func TestMemoryStoreForgetsIdleKeys(t *testing.T) {
 			"dropped", len(s.buckets))
 	}
 }
+
+// A store shared by several limits must not let a route with a short window
+// hand a fresh budget to a key that a long window is still holding: each
+// bucket is swept by its own refill time, not by the window of the request
+// that happens to trigger the sweep.
+func TestMemoryStoreSharedAcrossWindowsKeepsLongBudgets(t *testing.T) {
+	now := time.Now()
+	s := NewMemoryRateLimitStore()
+	s.now = func() time.Time { return now }
+
+	ctx := context.Background()
+	first, _ := s.Take(ctx, "login:victim", 1, time.Hour)
+	second, _ := s.Take(ctx, "login:victim", 1, time.Hour)
+	if !first.Allowed || second.Allowed {
+		t.Fatalf("got %v, %v; want the single hourly attempt spent",
+			first.Allowed, second.Allowed)
+	}
+
+	// Traffic on an unrelated route with a short window, long enough after
+	// the previous sweep to trigger another one.
+	now = now.Add(5 * time.Second)
+	if _, err := s.Take(ctx, "other", 100, time.Second); err != nil {
+		t.Fatal(err)
+	}
+
+	third, _ := s.Take(ctx, "login:victim", 1, time.Hour)
+	if third.Allowed {
+		t.Error("a short-window route reset a budget an hourly limit was still holding")
+	}
+
+	// Once the hour has passed the key is back to full and may be dropped.
+	now = now.Add(time.Hour)
+	if _, err := s.Take(ctx, "other", 100, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.buckets["login:victim"]; ok {
+		t.Error("a bucket that is back to full was kept")
+	}
+}
