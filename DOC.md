@@ -276,3 +276,7 @@ Wraps the request body with `http.MaxBytesReader`.
 - Runtime middleware never return errors; configuration errors (a wildcard CORS
   origin with credentials, a non-positive throttle limit) panic at construction,
   surfacing programming mistakes immediately.
+
+## Release v1.0.0
+
+Respect gzip quality values and preserve response status and cache variation. The v1 release keeps the existing import path and public API. Future incompatible changes require a new major version.

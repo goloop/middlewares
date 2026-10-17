@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -106,6 +107,7 @@ func Compress(opts ...CompressOption) Middleware {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Skip HEAD, clients that do not accept gzip, and connection
 			// upgrades (WebSocket and similar), which must not be buffered.
+			addVary(w.Header(), "Accept-Encoding")
 			if r.Method == http.MethodHead || !acceptsGzip(r) ||
 				r.Header.Get("Upgrade") != "" {
 				next.ServeHTTP(w, r)
@@ -129,9 +131,27 @@ func Compress(opts ...CompressOption) Middleware {
 
 // acceptsGzip reports whether the request advertises gzip support.
 func acceptsGzip(r *http.Request) bool {
-	for _, enc := range strings.Split(r.Header.Get("Accept-Encoding"), ",") {
-		if strings.EqualFold(strings.TrimSpace(strings.SplitN(enc, ";", 2)[0]), "gzip") {
-			return true
+	for _, header := range r.Header.Values("Accept-Encoding") {
+		for enc := range strings.SplitSeq(header, ",") {
+			name, params, _ := strings.Cut(enc, ";")
+			if !strings.EqualFold(strings.TrimSpace(name), "gzip") {
+				continue
+			}
+			quality := 1.0
+			for param := range strings.SplitSeq(params, ";") {
+				key, value, ok := strings.Cut(strings.TrimSpace(param), "=")
+				if !ok || !strings.EqualFold(key, "q") {
+					continue
+				}
+				var err error
+				quality, err = strconv.ParseFloat(strings.TrimSpace(value), 64)
+				if err != nil {
+					quality = 0
+				}
+			}
+			if quality > 0 && quality <= 1 {
+				return true
+			}
 		}
 	}
 	return false
@@ -155,6 +175,9 @@ type compressWriter struct {
 // held back until the first Write decides whether to compress. Informational
 // (1xx) statuses are forwarded immediately and do not latch the final code.
 func (c *compressWriter) WriteHeader(code int) {
+	if c.status != 0 {
+		return
+	}
 	if code >= 100 && code < 200 {
 		// Informational (1xx) responses, e.g. 103 Early Hints, are forwarded
 		// immediately and must not latch the final status.
@@ -187,6 +210,9 @@ func (c *compressWriter) discard() {
 // and streams through it. Once the decision is made, later writes go straight
 // to the chosen writer.
 func (c *compressWriter) Write(b []byte) (int, error) {
+	if c.status == 0 {
+		c.status = http.StatusOK
+	}
 	if c.decided {
 		return c.writeDecided(b)
 	}
